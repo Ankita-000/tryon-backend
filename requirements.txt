@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-multipart
+cloudinary
+gradio_client
+python-dotenv
+requests
