@@ -29,6 +29,7 @@ cloudinary.config(
 def root():
     return {"status": "Virtual Try-On Backend is running!"}
 
+
 @app.post("/tryon")
 async def virtual_tryon(
     person_image: UploadFile = File(...),
@@ -36,9 +37,9 @@ async def virtual_tryon(
     garment_description: str = Form(...)
 ):
     try:
-        FAL_KEY = os.getenv("FAL_KEY")
+        LIGHTX_KEY = os.getenv("LIGHTX_API_KEY")
 
-        # Save person image and upload to Cloudinary to get URL
+        # Upload person image to Cloudinary to get URL
         contents = await person_image.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(contents)
@@ -46,62 +47,54 @@ async def virtual_tryon(
 
         person_upload = cloudinary.uploader.upload(person_tmp_path)
         person_url = person_upload["secure_url"]
+        print("Person URL:", person_url)
 
-        # Submit job to fal.ai
+        # Call LightX Virtual Try-On API
         response = requests.post(
-            "https://queue.fal.run/fashn/tryon/v1.6",
+            "https://api.lightxeditor.com/external/api/v1/cloth-swap",
             headers={
-                "Authorization": f"Key {FAL_KEY}",
+                "x-api-key": LIGHTX_KEY,
                 "Content-Type": "application/json"
             },
             json={
-                "model_image": person_url,
-                "garment_image": garment_url,
-                "category": "one-pieces",
-                "mode": "balanced",
-                "garment_photo_type": "auto",
-                "nsfw_filter": True
+                "imageUrl": person_url,
+                "clothImageUrl": garment_url
             },
             timeout=30
         )
 
         data = response.json()
-        print("fal.ai submit:", data)
+        print("LightX response:", data)
 
-        request_id = data.get("request_id")
-        if not request_id:
-            return {"success": False, "error": f"Submit failed: {data}"}
+        # Get order ID for polling
+        order_id = data.get("body", {}).get("orderId")
+        if not order_id:
+            return {"success": False, "error": f"No order ID: {data}"}
 
         # Poll for result every 5 seconds
-        for i in range(30):
+        for i in range(20):
             time.sleep(5)
 
-            status_resp = requests.get(
-                f"https://queue.fal.run/fashn/tryon/v1.6/requests/{request_id}/status",
-                headers={"Authorization": f"Key {FAL_KEY}"},
+            status_resp = requests.post(
+                "https://api.lightxeditor.com/external/api/v1/order-status",
+                headers={
+                    "x-api-key": LIGHTX_KEY,
+                    "Content-Type": "application/json"
+                },
+                json={"orderId": order_id},
                 timeout=15
             )
+
             status_data = status_resp.json()
-            print(f"Poll {i+1}: {status_data.get('status')}")
+            status = status_data.get("body", {}).get("status")
+            print(f"Poll {i+1}: {status}")
 
-            if status_data.get("status") == "COMPLETED":
-                result_resp = requests.get(
-                    f"https://queue.fal.run/fashn/tryon/v1.6/requests/{request_id}",
-                    headers={"Authorization": f"Key {FAL_KEY}"},
-                    timeout=15
-                )
-                result_data = result_resp.json()
-                print("Result:", result_data)
-
-                images = result_data.get("images", [])
-                if images:
-                    result_image_url = images[0].get("url") if isinstance(images[0], dict) else images[0]
-                else:
-                    result_image_url = result_data.get("image", {}).get("url")
-
+            if status == "active":
+                result_image_url = status_data.get("body", {}).get("output")
                 if not result_image_url:
-                    return {"success": False, "error": f"No image in result: {result_data}"}
+                    return {"success": False, "error": "No output image"}
 
+                # Upload to Cloudinary
                 upload_response = cloudinary.uploader.upload(result_image_url)
                 result_url = upload_response["secure_url"]
 
@@ -112,8 +105,8 @@ async def virtual_tryon(
 
                 return {"success": True, "result_url": result_url}
 
-            elif status_data.get("status") == "FAILED":
-                return {"success": False, "error": "fal.ai processing failed"}
+            elif status == "failed":
+                return {"success": False, "error": "LightX processing failed"}
 
         return {"success": False, "error": "Timeout — took too long"}
 
