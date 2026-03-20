@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.middleware.cors import CORSMiddleware
 from gradio_client import Client, handle_file
+from huggingface_hub import login
 import cloudinary
 import cloudinary.uploader
 import os
@@ -49,10 +50,8 @@ async def virtual_tryon(
             garment_tmp_path = tmp2.name
 
         # Call HuggingFace IDM-VTON (FREE)
-        client = Client(
-            "yisol/IDM-VTON",
-            hf_token=os.getenv("HF_TOKEN")
-        )
+          login(token=os.getenv("HF_TOKEN"))
+        client = Client("yisol/IDM-VTON")
 
         result = client.predict(
             dict={
