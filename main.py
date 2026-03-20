@@ -5,6 +5,7 @@ import cloudinary.uploader
 import os
 import tempfile
 import requests
+import base64
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,6 +29,44 @@ cloudinary.config(
 def root():
     return {"status": "Virtual Try-On Backend is running!"}
 
+
+def try_space(person_path, garment_path, description, space_name):
+    """Try a specific HuggingFace space"""
+    from gradio_client import Client, handle_file
+    client = Client(space_name)
+    result = client.predict(
+        dict={
+            "background": handle_file(person_path),
+            "layers": [],
+            "composite": None
+        },
+        garm_img=handle_file(garment_path),
+        garment_des=description,
+        is_checked=True,
+        is_checked_crop=False,
+        denoise_steps=30,
+        seed=42,
+        api_name="/tryon"
+    )
+    return result
+
+
+def extract_image_path(result):
+    """Extract image path from any result format"""
+    if isinstance(result, (list, tuple)):
+        for item in result:
+            if isinstance(item, str) and os.path.exists(item):
+                return item
+            elif isinstance(item, dict):
+                p = item.get('path') or item.get('url') or item.get('value')
+                if p: return p
+    elif isinstance(result, str):
+        return result
+    elif isinstance(result, dict):
+        return result.get('path') or result.get('url')
+    return None
+
+
 @app.post("/tryon")
 async def virtual_tryon(
     person_image: UploadFile = File(...),
@@ -35,66 +74,58 @@ async def virtual_tryon(
     garment_description: str = Form(...)
 ):
     try:
-        # Save person image temporarily
+        # Save person image
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             contents = await person_image.read()
             tmp.write(contents)
             person_tmp_path = tmp.name
 
         # Download garment image
-        garment_response = requests.get(garment_url)
+        garment_response = requests.get(garment_url, timeout=15)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp2:
             tmp2.write(garment_response.content)
             garment_tmp_path = tmp2.name
 
-        # Try Nymbo Virtual Try-On space (very reliable & free)
-        from gradio_client import Client, handle_file
+        # Try multiple spaces in order until one works
+        spaces = [
+            "franciszzj/Leffa",
+            "levihsu/OOTDiffusion",
+            "yisol/IDM-VTON",
+            "Nymbo/Virtual-Try-On",
+        ]
 
-        client = Client("Nymbo/Virtual-Try-On")
-
-        result = client.predict(
-            dict={
-                "background": handle_file(person_tmp_path),
-                "layers": [],
-                "composite": None
-            },
-            garm_img=handle_file(garment_tmp_path),
-            garment_des=garment_description,
-            is_checked=True,
-            is_checked_crop=False,
-            denoise_steps=30,
-            seed=42,
-            api_name="/tryon"
-        )
-
-        # Handle different result formats
         result_image_path = None
+        last_error = ""
 
-        if isinstance(result, (list, tuple)):
-            # Try first element
-            for item in result:
-                if isinstance(item, str) and os.path.exists(item):
-                    result_image_path = item
+        for space in spaces:
+            try:
+                print(f"Trying space: {space}")
+                result = try_space(
+                    person_tmp_path,
+                    garment_tmp_path,
+                    garment_description,
+                    space
+                )
+                result_image_path = extract_image_path(result)
+                if result_image_path:
+                    print(f"Success with space: {space}")
                     break
-                elif isinstance(item, dict) and 'path' in item:
-                    result_image_path = item['path']
-                    break
-                elif isinstance(item, dict) and 'url' in item:
-                    result_image_path = item['url']
-                    break
-        elif isinstance(result, str):
-            result_image_path = result
-        elif isinstance(result, dict):
-            result_image_path = result.get('path') or result.get('url')
+            except Exception as e:
+                last_error = str(e)
+                print(f"Space {space} failed: {e}")
+                continue
 
         if not result_image_path:
-            return {"success": False, "error": f"Unexpected result format: {str(result)[:200]}"}
+            return {
+                "success": False,
+                "error": f"All spaces unavailable. Last error: {last_error}"
+            }
 
-        # Upload to Cloudinary
+        # Upload result to Cloudinary
         upload_response = cloudinary.uploader.upload(result_image_path)
         result_url = upload_response["secure_url"]
 
-        # Clean up
+        # Cleanup
         try:
             os.unlink(person_tmp_path)
             os.unlink(garment_tmp_path)
