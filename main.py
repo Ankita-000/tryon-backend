@@ -47,13 +47,10 @@ async def virtual_tryon(
             tmp2.write(garment_response.content)
             garment_tmp_path = tmp2.name
 
-        # Call HuggingFace IDM-VTON using gradio_client
+        # Try Nymbo Virtual Try-On space (very reliable & free)
         from gradio_client import Client, handle_file
 
-        client = Client(
-            "yisol/IDM-VTON",
-            headers={"Authorization": f"Bearer {os.getenv('HF_TOKEN')}"}
-        )
+        client = Client("Nymbo/Virtual-Try-On")
 
         result = client.predict(
             dict={
@@ -70,14 +67,39 @@ async def virtual_tryon(
             api_name="/tryon"
         )
 
-        result_image_path = result[0]
+        # Handle different result formats
+        result_image_path = None
+
+        if isinstance(result, (list, tuple)):
+            # Try first element
+            for item in result:
+                if isinstance(item, str) and os.path.exists(item):
+                    result_image_path = item
+                    break
+                elif isinstance(item, dict) and 'path' in item:
+                    result_image_path = item['path']
+                    break
+                elif isinstance(item, dict) and 'url' in item:
+                    result_image_path = item['url']
+                    break
+        elif isinstance(result, str):
+            result_image_path = result
+        elif isinstance(result, dict):
+            result_image_path = result.get('path') or result.get('url')
+
+        if not result_image_path:
+            return {"success": False, "error": f"Unexpected result format: {str(result)[:200]}"}
 
         # Upload to Cloudinary
         upload_response = cloudinary.uploader.upload(result_image_path)
         result_url = upload_response["secure_url"]
 
-        os.unlink(person_tmp_path)
-        os.unlink(garment_tmp_path)
+        # Clean up
+        try:
+            os.unlink(person_tmp_path)
+            os.unlink(garment_tmp_path)
+        except:
+            pass
 
         return {"success": True, "result_url": result_url}
 
