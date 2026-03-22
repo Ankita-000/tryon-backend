@@ -39,7 +39,7 @@ async def virtual_tryon(
     try:
         LIGHTX_KEY = os.getenv("LIGHTX_API_KEY")
 
-        # Upload person image to Cloudinary to get URL
+        # Upload person image to Cloudinary to get a URL
         contents = await person_image.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(contents)
@@ -49,16 +49,16 @@ async def virtual_tryon(
         person_url = person_upload["secure_url"]
         print("Person URL:", person_url)
 
-        # Call LightX Virtual Try-On API
+        # ✅ CORRECT LightX Virtual Try-On endpoint
         response = requests.post(
-            "https://api.lightxeditor.com/external/api/v1/cloth-swap",
+            "https://api.lightxeditor.com/external/api/v2/aivirtualtryon",
             headers={
-                "x-api-key": LIGHTX_KEY,
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "x-api-key": LIGHTX_KEY
             },
             json={
                 "imageUrl": person_url,
-                "clothImageUrl": garment_url
+                "styleImageUrl": garment_url
             },
             timeout=30
         )
@@ -66,20 +66,20 @@ async def virtual_tryon(
         data = response.json()
         print("LightX response:", data)
 
-        # Get order ID for polling
+        # Get order ID
         order_id = data.get("body", {}).get("orderId")
         if not order_id:
             return {"success": False, "error": f"No order ID: {data}"}
 
-        # Poll for result every 5 seconds
-        for i in range(20):
+        # Poll for result every 5 seconds (max 2 minutes)
+        for i in range(24):
             time.sleep(5)
 
             status_resp = requests.post(
                 "https://api.lightxeditor.com/external/api/v1/order-status",
                 headers={
-                    "x-api-key": LIGHTX_KEY,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "x-api-key": LIGHTX_KEY
                 },
                 json={"orderId": order_id},
                 timeout=15
@@ -106,9 +106,9 @@ async def virtual_tryon(
                 return {"success": True, "result_url": result_url}
 
             elif status == "failed":
-                return {"success": False, "error": "LightX processing failed"}
+                return {"success": False, "error": "Processing failed"}
 
-        return {"success": False, "error": "Timeout — took too long"}
+        return {"success": False, "error": "Timeout"}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
