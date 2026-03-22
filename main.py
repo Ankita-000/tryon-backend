@@ -39,7 +39,7 @@ async def virtual_tryon(
     try:
         LIGHTX_KEY = os.getenv("LIGHTX_API_KEY")
 
-        # Upload person image to Cloudinary to get a URL
+        # Upload person image to Cloudinary to get a public URL
         contents = await person_image.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(contents)
@@ -49,7 +49,7 @@ async def virtual_tryon(
         person_url = person_upload["secure_url"]
         print("Person URL:", person_url)
 
-        # ✅ CORRECT LightX Virtual Try-On endpoint
+        # Call LightX Virtual Try-On API
         response = requests.post(
             "https://api.lightxeditor.com/external/api/v2/aivirtualtryon",
             headers={
@@ -58,7 +58,8 @@ async def virtual_tryon(
             },
             json={
                 "imageUrl": person_url,
-                "styleImageUrl": garment_url
+                "styleImageUrl": garment_url,
+                "clothType": "full_body"
             },
             timeout=30
         )
@@ -66,7 +67,7 @@ async def virtual_tryon(
         data = response.json()
         print("LightX response:", data)
 
-        # Get order ID
+        # Get order ID for polling
         order_id = data.get("body", {}).get("orderId")
         if not order_id:
             return {"success": False, "error": f"No order ID: {data}"}
@@ -94,10 +95,11 @@ async def virtual_tryon(
                 if not result_image_url:
                     return {"success": False, "error": "No output image"}
 
-                # Upload to Cloudinary
+                # Upload result to Cloudinary
                 upload_response = cloudinary.uploader.upload(result_image_url)
                 result_url = upload_response["secure_url"]
 
+                # Cleanup temp file
                 try:
                     os.unlink(person_tmp_path)
                 except:
@@ -106,9 +108,9 @@ async def virtual_tryon(
                 return {"success": True, "result_url": result_url}
 
             elif status == "failed":
-                return {"success": False, "error": "Processing failed"}
+                return {"success": False, "error": "LightX processing failed"}
 
-        return {"success": False, "error": "Timeout"}
+        return {"success": False, "error": "Timeout — processing took too long"}
 
     except Exception as e:
         return {"success": False, "error": str(e)}
