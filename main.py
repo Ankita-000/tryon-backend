@@ -39,7 +39,7 @@ async def virtual_tryon(
     try:
         LIGHTX_KEY = os.getenv("LIGHTX_API_KEY")
 
-        # Upload person image to Cloudinary to get a public URL
+        # Save person image and upload to Cloudinary
         contents = await person_image.read()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(contents)
@@ -67,10 +67,12 @@ async def virtual_tryon(
         data = response.json()
         print("LightX response:", data)
 
-        # Get order ID for polling
-        order_id = data.get("body", {}).get("orderId")
+        # Get order ID
+        body = data.get("body") or {}
+        order_id = body.get("orderId")
+
         if not order_id:
-            return {"success": False, "error": f"No order ID: {data}"}
+            return {"success": False, "error": f"No order ID received: {data}"}
 
         # Poll for result every 5 seconds (max 2 minutes)
         for i in range(24):
@@ -87,19 +89,21 @@ async def virtual_tryon(
             )
 
             status_data = status_resp.json()
-            status = status_data.get("body", {}).get("status")
-            print(f"Poll {i+1}: {status}")
+            print(f"Poll {i+1}: {status_data}")
+
+            body = status_data.get("body") or {}
+            status = body.get("status")
+            print(f"Status: {status}")
 
             if status == "active":
-                result_image_url = status_data.get("body", {}).get("output")
+                result_image_url = body.get("output")
                 if not result_image_url:
-                    return {"success": False, "error": "No output image"}
+                    return {"success": False, "error": "No output image in response"}
 
                 # Upload result to Cloudinary
                 upload_response = cloudinary.uploader.upload(result_image_url)
                 result_url = upload_response["secure_url"]
 
-                # Cleanup temp file
                 try:
                     os.unlink(person_tmp_path)
                 except:
